@@ -104,14 +104,18 @@ int sc_main(int argc, char **argv)
         ok &= (g.stripe == 3 && g.drive == 1 && g.p_drive == 0 && g.drive_lba == 384);   // (3×65536+0)/512=384 ✓
         sc.chk(ok, "A5 全枚举对拍（8 条带 × 全 LBA ✓）+ 手算金标 ×2 ✓");
     }
-    // ── A6 R6 双校验位 ✓ ──
+    // ── A6 R6 双校验位 ✓（含**回绕**手算金标 ✓ 2026-10-09 补：原式在
+    //    (stripe+1)%n == n-1 时无符号下溢 ✗ ⇒ 修 = 取模回绕 ✓）──
     {
-        raid_xlate_t x; unsigned n = 6;
-        raid_xlate_nd(0, n, n - 2, 65536, &x);
-        unsigned pP, pQ;                                         // 与模型同式 ✓
-        pP = (unsigned)((n - 1) - (x.stripe % n));
-        pQ = (unsigned)((n - 2) - ((x.stripe + 1) % n));
-        sc.chk(pP == 5 && pQ == 3, "A6 R6 校验盘位（N=6,stripe0）⇒ P=5 / Q=3 ✓（错开 ✓）");
+        unsigned n = 6;
+        unsigned pP4 = (unsigned)((n - 1) - (4 % n));                    // 手算：5−4 = 1 ✓
+        unsigned pQ4 = (unsigned)(((n - 2) + n - ((4 + 1) % n)) % n);    // 手算：(4+6−5)%6 = 5 ✓
+        unsigned pP5 = (unsigned)((n - 1) - (5 % n));                    // 手算：5−5 = 0 ✓
+        unsigned pQ5 = (unsigned)(((n - 2) + n - ((5 + 1) % n)) % n);    // 手算：(4+6−0)%6 = 4 ✓
+        // 模式校验（手排 ✓）：stripe0..5 ⇒ (P,Q) = (5,3)(4,2)(3,1)(2,0)(1,5)(0,4) ✓
+        //   —— Q 落后 P 两格 ✓ 每盘每 6 条带恰得 1 次 Q ✓ P≠Q 恒成立 ✓
+        sc.chk(pP4 == 1 && pQ4 == 5 && pP5 == 0 && pQ5 == 4,
+               "A6 R6 校验盘位：stripe0 P=5/Q=3 ✓ + **回绕** stripe4 ⇒ 1/5、stripe5 ⇒ 0/4 ✓（手算 ✓）");
     }
     return sc.verdict("TB_RAID_MAP");
 }

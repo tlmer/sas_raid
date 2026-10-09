@@ -49,7 +49,7 @@ struct RefR6 {
         : n(n_), nd(nd_), ss(ss_), cap(cap_), m(n_, std::vector<uint8_t>(cap_, 0)) {}
     void par(uint64_t stripe, unsigned *pP, unsigned *pQ) const {
         *pP = (unsigned)((n - 1) - (stripe % n));
-        *pQ = (unsigned)((n - 2) - ((stripe + 1) % n));
+        *pQ = (unsigned)(((n - 2) + n - ((stripe + 1) % n)) % n);   // 回绕 ✓（与模型同修 ✓）
     }
     unsigned phys(unsigned k, uint64_t stripe) const {
         unsigned pP, pQ; par(stripe, &pP, &pQ); unsigned cnt = 0;
@@ -99,7 +99,7 @@ static bool pq_identity(const RaidMemBackend &bk, unsigned v, uint64_t stripe,
                         unsigned n, unsigned nd, uint64_t ss, const GFTable &gf)
 {
     unsigned pP = (unsigned)((n - 1) - (stripe % n));
-    unsigned pQ = (unsigned)((n - 2) - ((stripe + 1) % n));
+    unsigned pQ = (unsigned)(((n - 2) + n - ((stripe + 1) % n)) % n);   // 回绕 ✓
     std::vector<uint8_t> P(ss, 0), Q(ss, 0);
     unsigned k = 0;
     for (unsigned d = 0; d < n; d++) {
@@ -137,7 +137,7 @@ int sc_main(int argc, char **argv)
     RefR6 ref(6, 4, SS, CAP);                                     // vol0 参考 ✓
     GFTable gf;
 
-    std::vector<uint8_t> vexp((size_t)1024 * 512, 0);
+    std::vector<uint8_t> vexp((size_t)4096 * 512, 0);   // D9 用到 stripe4/5 ⇒ 扩到 4096 块 ✓
     auto wr = [&](unsigned v, uint64_t lba, const std::vector<uint8_t> &b) {
         return raid.vdisk_write(v, lba, b.data(), (unsigned)(b.size() / 512));
     };
@@ -190,6 +190,43 @@ int sc_main(int argc, char **argv)
                pq_identity(bk, 0, 1, 6, 4, SS, gf),
                "D4 行1 全条带：对拍 ✓ c_full=2 ✓ 两行 P/Q 独立恒等式 ✓（P/Q 位 5/3→4/2 ✓）");
     }
+    // ── D9 R6 校验盘**回绕旋转**存储级金标（stripe4/5 ✓ 手排 ✓）──
+    {
+        std::vector<uint8_t> w9((size_t)1024 * 512); pat_fill(w9.data(), w9.size(), 0xD9);
+        bool okw = wr(0, 2048, w9); note(2048, w9);
+        // 手排金标（n=6 ✓ 修回绕后 ✓）：stripe4 ⇒ P@盘1 / Q@盘5，数据序 [0,2,3,4] ✓
+        //                              stripe5 ⇒ P@盘0 / Q@盘4，数据序 [1,2,3,5] ✓
+        const uint8_t *s4 = &vexp[(size_t)2048 * 512];   // stripe4 行首 ✓
+        const uint8_t *s5 = &vexp[(size_t)(2048 + 512) * 512];
+        std::vector<uint8_t> P4((size_t)128 * 512, 0), P5((size_t)128 * 512, 0);
+        std::vector<uint8_t> Q4((size_t)128 * 512, 0), Q5((size_t)128 * 512, 0);
+        for (unsigned k = 0; k < 4; k++) {
+            const uint8_t *u4 = s4 + (size_t)k * 128 * 512;
+            const uint8_t *u5 = s5 + (size_t)k * 128 * 512;
+            uint8_t g = 1; for (unsigned j = 0; j < k; j++) g = gf.mul(g, 2);
+            for (size_t i = 0; i < P4.size(); i++) {
+                P4[i] ^= u4[i]; Q4[i] ^= gf.mul(g, u4[i]);
+                P5[i] ^= u5[i]; Q5[i] ^= gf.mul(g, u5[i]);
+            }
+        }
+        // 直查（每盘 128KB 单元 = 虚拟片 ✓）：stripe4 ⇒ 盘1 = P4 / 盘5 = Q4 ✓
+        auto chk_drv = [&](unsigned d, uint64_t mofs, const uint8_t *ex) {
+            return std::memcmp(&bk.mem[0][d][(size_t)mofs], ex, (size_t)128 * 512) == 0;
+        };
+        bool rot4 = chk_drv(0, 4 * 65536, &s4[(size_t)0 * 128 * 512]) &&
+                    chk_drv(2, 4 * 65536, &s4[(size_t)1 * 128 * 512]) &&
+                    chk_drv(3, 4 * 65536, &s4[(size_t)2 * 128 * 512]) &&
+                    chk_drv(4, 4 * 65536, &s4[(size_t)3 * 128 * 512]) &&
+                    chk_drv(1, 4 * 65536, P4.data()) && chk_drv(5, 4 * 65536, Q4.data());
+        bool rot5 = chk_drv(1, 5 * 65536, &s5[(size_t)0 * 128 * 512]) &&
+                    chk_drv(2, 5 * 65536, &s5[(size_t)1 * 128 * 512]) &&
+                    chk_drv(3, 5 * 65536, &s5[(size_t)2 * 128 * 512]) &&
+                    chk_drv(5, 5 * 65536, &s5[(size_t)3 * 128 * 512]) &&
+                    chk_drv(0, 5 * 65536, P5.data()) && chk_drv(4, 5 * 65536, Q5.data());
+        sc.chk(okw && rot4 && rot5 && rd0_eq(0, vexp),
+               "D9 回绕旋转（stripe4 ⇒ P@1/Q@5 ✓ stripe5 ⇒ P@0/Q@4 ✓ 存储级 ✓ 手排金标 ✓）");
+    }
+
     // ── D5 单缺读（拔盘 1）──
     {
         uint32_t d0 = raid.cnt_deg();

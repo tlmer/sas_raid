@@ -51,7 +51,7 @@ static bool pq_identity(const RaidMemBackend &bk, unsigned v, uint64_t stripe,
                         unsigned n, unsigned nd, uint64_t ss, const GFTable &gf)
 {
     unsigned pP = (unsigned)((n - 1) - (stripe % n));
-    unsigned pQ = (unsigned)((n - 2) - ((stripe + 1) % n));
+    unsigned pQ = (unsigned)(((n - 2) + n - ((stripe + 1) % n)) % n);   // 回绕 ✓
     std::vector<uint8_t> P(ss, 0), Q(ss, 0);
     unsigned k = 0;
     for (unsigned d = 0; d < n; d++) {

@@ -116,7 +116,12 @@ static void raid_parity_drives(const raid_volume_t *v, uint64_t stripe, unsigned
 {
     unsigned n = v->n_drives;
     *pP = (unsigned)((n - 1) - (stripe % n));
-    *pQ = (v->level == RAID_LVL_R6) ? (unsigned)((n - 2) - ((stripe + 1) % n)) : 0xFFFF;
+    // ★ R6 的 Q 盘：**取模回绕** ✓（2026-10-09 修 ✗→✓：原式 (n-2)-((stripe+1)%n) 在
+    //   (stripe+1)%n == n-1 时**无符号下溢** ✗（n=6,stripe=4 ⇒ −1 ✗）—— 旧 D 组只测
+    //   stripe 0/1 未暴露 ✗；回绕后 = "Q 落后 P 两格" ✓ 每 n 条带各盘均得一次 Q ✓）
+    *pQ = (v->level == RAID_LVL_R6)
+          ? (unsigned)(((n - 2) + n - ((stripe + 1) % n)) % n)
+          : 0xFFFF;
 }
 
 void SasRaidTlm::vol_config(unsigned v, int level, unsigned n_drives, uint32_t stripe_size,

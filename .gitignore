@@ -1,0 +1,10 @@
+*.o
+*.a
+/model/tb_raid_map
+/model/tb_raid_r01
+/model/tb_raid_r5
+/model/tb_raid_r6
+/model/tb_raid_rebuild
+/model/tb_raid_journal
+/model/tb_raid_array
+*.bak*
